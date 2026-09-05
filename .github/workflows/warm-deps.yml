@@ -1,0 +1,40 @@
+name: warm-deps
+
+# Populates the third_party (DEPS externals + Emscripten) cache WITHOUT
+# building anything. The build workflow restores the exact same key, so a
+# green warm run here removes ~10 min of downloads from every build run —
+# even while builds still fail downstream (cache save is skipped on failure,
+# which is why the build alone can never warm it).
+#
+# Run on schedule (DEPS moves with Skia main) or on demand.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * *'
+
+jobs:
+  warm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout Skia (shallow — sync only, no build)
+        uses: actions/checkout@v4
+        with:
+          repository: google/skia
+          ref: main
+          fetch-depth: 1
+          path: skia
+
+      # MUST use the identical key as build-canvaskit-webgpu.yml so the
+      # saved entry is an exact hit there.
+      - name: Cache third_party (DEPS externals + Emscripten)
+        uses: actions/cache@v4
+        with:
+          path: skia/third_party
+          key: deps-${{ hashFiles('skia/DEPS') }}
+          restore-keys: deps-
+
+      - name: Sync DEPS
+        working-directory: skia
+        run: python3 tools/git-sync-deps
