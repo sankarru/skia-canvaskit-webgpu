@@ -102,6 +102,20 @@ jobs:
           ENABLE_PARTICLES: ${{ inputs.enable_particles && 'true' || 'false' }}
         run: bash "$GITHUB_WORKSPACE/repo/scripts/build-canvaskit-webgpu.sh"
 
+      # Diagnostic (temporary): the Dawn Emscripten headers are generated
+      # content — upload them even on failure so header issues are debuggable
+      # without guessing. Compares what Skia consumed vs what Dawn produced.
+      - name: Upload Dawn generated headers (debug)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dawn-headers-debug
+          path: |
+            ${{ env.SKIA_DIR }}/out/canvaskit_wasm/gen/third_party/dawn/include
+            ${{ env.SKIA_DIR }}/out/canvaskit_wasm/cmake_dawn/gen/src/emdawnwebgpu/include
+          retention-days: 7
+          if-no-files-found: warn
+
       - name: Smoke check output
         run: |
           ls -la "$SKIA_DIR/out/canvaskit_wasm/"
