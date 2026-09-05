@@ -84,16 +84,15 @@ jobs:
         working-directory: ${{ env.SKIA_DIR }}
         run: python3 tools/git-sync-deps
 
-      # Build-dir cache (ninja objects): absolute paths are stable across
-      # runs (same repo/branch/workspace layout), so ninja resumes
-      # incrementally. Keyed on Skia SHA + feature inputs; warm-deps keeps
-      # third_party warm, this keeps compiled objects warm.
-      - name: Cache build dir
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.SKIA_DIR }}/out/canvaskit_wasm
-          key: ckout-${{ env.CACHE_VERSION }}-${{ env.SKIA_SHORT }}-${{ inputs.enable_pdf }}-${{ inputs.enable_svg }}-${{ inputs.enable_particles }}
-          restore-keys: ckout-${{ env.CACHE_VERSION }}-
+      # NOTE: no out/ (ninja objects) cache, deliberately. On ephemeral
+      # runners every run starts with a fresh checkout, so ALL sources are
+      # newer than any restored objects and ninja rebuilds everything anyway
+      # (verified: full-length builds every time despite save/restore
+      # succeeding). Object caching here would only add tar churn. Real
+      # speedups come from warm-deps (content-based, works) and, once green,
+      # a self-hosted runner with a persistent workspace for true incrementals.
+      # sccache was also tried and removed: it injects -fdiagnostics-color
+      # into clang's argv, fatal for assembler paths under -Werror.
 
       - name: Build CanvasKit WebGPU
         working-directory: ${{ env.SKIA_DIR }}
@@ -102,16 +101,6 @@ jobs:
           ENABLE_SVG: ${{ inputs.enable_svg && 'true' || 'false' }}
           ENABLE_PARTICLES: ${{ inputs.enable_particles && 'true' || 'false' }}
         run: bash "$GITHUB_WORKSPACE/repo/scripts/build-canvaskit-webgpu.sh"
-
-      # Bank partial progress even when the build fails (post-step save is
-      # skipped on failure). Ninja is crash-consistent; stale objects rebuild
-      # on content change. Bump CACHE_VERSION if a cache ever goes poison.
-      - name: Save build dir cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ env.SKIA_DIR }}/out/canvaskit_wasm
-          key: ckout-${{ env.CACHE_VERSION }}-${{ env.SKIA_SHORT }}-${{ inputs.enable_pdf }}-${{ inputs.enable_svg }}-${{ inputs.enable_particles }}
 
       - name: Smoke check output
         run: |
