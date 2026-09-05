@@ -146,7 +146,10 @@ src = p.read_text()
 old = '  build_targets = ["webgpu_headers_gen", "dawn_proc", "dawn_native"]\n'
 assert old in src, "build_dawn.py targets anchor missing"
 new = old + '''  if target_os == "wasm":
-    build_targets = ["webgpu_headers_gen", "dawn_native"]
+    # Under EMSCRIPTEN, Dawn builds no dawn_proc (NOT EMSCRIPTEN-guarded)
+    # and no dawn_native (native/ subdir skipped). The Emscripten port
+    # targets provide the C/C++ shims + JS glue instead.
+    build_targets = ["webgpu_headers_gen", "emdawnwebgpu_c", "emdawnwebgpu_cpp"]
 '''
 p.write_text(src.replace(old, new))
 print("build_dawn.py: dawn_proc dropped for wasm")
@@ -164,18 +167,21 @@ source third_party/externals/emsdk/emsdk_env.sh
 # (ninja, cmake, warmup) goes through sccache with zero GN changes.
 if [ "$USE_SCCACHE" = "true" ]; then
   if command -v sccache >/dev/null 2>&1; then
+    # emcc reads ONLY its config file for the wrapper (env is ignored), and
+    # it locates that file via EM_CONFIG else ~/.emscripten — pin it to the
+    # file we edit so the wrapper is guaranteed active.
+    export EM_CONFIG="$EMSDK/.emscripten"
     python3 - <<'EOF'
-import pathlib, os
-cfg = pathlib.Path(os.environ["EMSDK"]) / ".emscripten"
+import pathlib, os, re
+cfg = pathlib.Path(os.environ["EM_CONFIG"])
 src = cfg.read_text()
 line = "COMPILER_WRAPPER = 'sccache'"
 if "COMPILER_WRAPPER" in src:
-    import re
     src = re.sub(r"(?m)^#?\s*COMPILER_WRAPPER\s*=.*$", line, src)
 else:
     src = src.rstrip("\n") + "\n" + line + "\n"
 cfg.write_text(src)
-print("emscripten config wrapper set:")
+print("emcc config:", os.environ["EM_CONFIG"])
 print([l for l in src.splitlines() if "COMPILER_WRAPPER" in l])
 EOF
     # Start server loudly (no suppression: a dead server = silent no-cache).
