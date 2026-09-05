@@ -41,7 +41,7 @@ src = p.read_text()
 old = """} else {
   _cc = cc
   _cxx = cxx
-}"""
+  _dawn_lib_name = "libdawn_combined.a\""""
 new = """} else {
   _cc = cc
   _cxx = cxx
@@ -50,7 +50,7 @@ new = """} else {
     _cc = skia_emsdk_dir + "/upstream/emscripten/emcc"
     _cxx = skia_emsdk_dir + "/upstream/emscripten/em++"
   }
-}"""
+  _dawn_lib_name = "libdawn_combined.a\""""
 assert old in src, "dawn BUILD.gn anchor not found; upstream changed the file"
 p.write_text(src.replace(old, new))
 print("dawn BUILD.gn: wasm cc/cxx forced to emcc/em++")
