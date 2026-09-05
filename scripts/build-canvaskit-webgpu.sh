@@ -212,6 +212,9 @@ unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH || true
 # its wasm64 compiler-rt sysroot). Downgrade just that warning class; every
 # other -Werror stays fatal. EMCC_CFLAGS is honored by every emcc invocation.
 export EMCC_CFLAGS="-Wno-error=unused-command-line-argument"
+# DIAGNOSTIC (temporary): log emcc's inner clang invocations so the log shows
+# exactly who adds -fdiagnostics-color and whether sccache is in the chain.
+export EMCC_DEBUG=1
 
 # ---- 4. Build ----
 bash modules/canvaskit/compile.sh webgpu
