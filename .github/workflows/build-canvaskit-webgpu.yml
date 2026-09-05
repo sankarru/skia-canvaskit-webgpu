@@ -1,0 +1,121 @@
+name: build-canvaskit-webgpu
+
+# Builds CanvasKit (Skia Graphite + Dawn WebGPU) from latest Skia main,
+# with paragraph, skottie, svg/pdf/particles libs and full codecs.
+# JS/WASM API = everything upstream CanvasKit exposes (paragraph, skottie,
+# pathops, skp, webgl/webgpu contexts, image encode/decode, shaper...).
+# NOTE: upstream ships NO JS bindings for SVG / particles / PDF document —
+# those libs are compiled in; JS bindings for them are a follow-up task.
+
+on:
+  workflow_dispatch:
+    inputs:
+      skia_ref:
+        description: 'Skia ref to build (branch/tag/SHA)'
+        required: false
+        default: 'main'
+      enable_pdf:
+        description: 'Compile SkPDF lib in'
+        required: false
+        type: boolean
+        default: true
+      enable_svg:
+        description: 'Compile SkSVG lib in'
+        required: false
+        type: boolean
+        default: true
+      enable_particles:
+        description: 'Compile particles lib in'
+        required: false
+        type: boolean
+        default: true
+      create_release:
+        description: 'Publish canvaskit.js/wasm as a GitHub release'
+        required: false
+        type: boolean
+        default: true
+
+env:
+  SKIA_DIR: ${{ github.workspace }}/skia
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL 2>/dev/null || true
+          sudo docker image prune -af 2>/dev/null || true
+          df -h /
+
+      - name: Checkout this repo (scripts + patches)
+        uses: actions/checkout@v4
+        with:
+          path: repo
+
+      - name: Checkout Skia
+        uses: actions/checkout@v4
+        with:
+          repository: google/skia
+          ref: ${{ inputs.skia_ref || 'main' }}
+          fetch-depth: 0
+          path: skia
+
+      - name: Record Skia version
+        run: |
+          cd "$SKIA_DIR"
+          git rev-parse HEAD > "$GITHUB_WORKSPACE/SKIA_SHA"
+          cat "$GITHUB_WORKSPACE/SKIA_SHA"
+          python3 -c "import re; d=open('DEPS').read(); m=re.search(r\"'dawn_revision': '([0-9a-f]{40})'\", d); print('dawn:', m.group(1) if m else 'n/a')"
+
+      - name: Sync DEPS (Dawn, ICU, harfbuzz, emsdk pins...)
+        working-directory: ${{ env.SKIA_DIR }}
+        run: python3 tools/git-sync-deps
+
+      - name: Build CanvasKit WebGPU
+        working-directory: ${{ env.SKIA_DIR }}
+        env:
+          ENABLE_PDF: ${{ inputs.enable_pdf && 'true' || 'false' }}
+          ENABLE_SVG: ${{ inputs.enable_svg && 'true' || 'false' }}
+          ENABLE_PARTICLES: ${{ inputs.enable_particles && 'true' || 'false' }}
+        run: bash "$GITHUB_WORKSPACE/repo/scripts/build-canvaskit-webgpu.sh"
+
+      - name: Smoke check output
+        run: |
+          ls -la "$SKIA_DIR/out/canvaskit_wasm/"
+          file "$SKIA_DIR/out/canvaskit_wasm/canvaskit.wasm"
+          node -e "const s=require('fs').statSync(process.argv[1]); console.log('wasm bytes:', s.size)" \
+            "$SKIA_DIR/out/canvaskit_wasm/canvaskit.wasm"
+
+      - name: Stage artifacts
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp "$SKIA_DIR/out/canvaskit_wasm/canvaskit.js" "$GITHUB_WORKSPACE/dist/"
+          cp "$SKIA_DIR/out/canvaskit_wasm/canvaskit.wasm" "$GITHUB_WORKSPACE/dist/"
+          cp "$GITHUB_WORKSPACE/SKIA_SHA" "$GITHUB_WORKSPACE/dist/SKIA_SHA"
+          (cd "$GITHUB_WORKSPACE/dist" && sha256sum canvaskit.js canvaskit.wasm > SHA256SUMS)
+          cat "$GITHUB_WORKSPACE/dist/SHA256SUMS"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: canvaskit-webgpu
+          path: dist/
+          retention-days: 30
+
+      - name: Create release
+        if: ${{ inputs.create_release }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SKIA_SHA=$(cat "$GITHUB_WORKSPACE/SKIA_SHA")
+          TAG="canvaskit-webgpu-$(date +%Y%m%d)-${SKIA_SHA:0:12}"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          gh release create "$TAG" "$GITHUB_WORKSPACE/dist/"* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "CanvasKit WebGPU $TAG" \
+            --notes "CanvasKit WASM (Skia Graphite + Dawn) built from google/skia@${SKIA_SHA}.
+          Features: graphite, webgpu, paragraph+harfbuzz/icu, skottie, svg/pdf/particles libs, jpeg/png/webp decode+encode, pathops, rt-shader, skp serialization.
+          JS API = everything upstream exposes; SVG/particles/PDF have no upstream JS bindings yet (libs compiled in)."
