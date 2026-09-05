@@ -159,6 +159,24 @@ new = old + '''  if target_os == "wasm":
 p.write_text(src.replace(old, new))
 print("build_dawn.py: dawn_proc dropped for wasm")
 EOF
+# ---- 1f. Copy Emscripten headers (not vanilla) for wasm ----
+# build_dawn.py copies cmake_dawn/gen/include/{dawn,webgpu} for Skia to
+# consume, but under EMSCRIPTEN that dir is never produced — the usable
+# headers (no __EMSCRIPTEN__ guard) live at
+# cmake_dawn/gen/src/emdawnwebgpu/include/{dawn,webgpu}. Repoint the source.
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("third_party/dawn/build_dawn.py")
+src = p.read_text()
+old = '  generated_headers_src = os.path.join(build_dir, "gen", "include")\n'
+assert old in src, "build_dawn.py headers anchor missing"
+new = old + '''  if target_os == "wasm":
+    generated_headers_src = os.path.join(
+        build_dir, "gen", "src", "emdawnwebgpu", "include")
+'''
+p.write_text(src.replace(old, new))
+print("build_dawn.py: wasm headers copied from emdawnwebgpu layout")
+EOF
 
 # ---- 3. Emscripten from DEPS ----
 python3 bin/activate-emsdk
