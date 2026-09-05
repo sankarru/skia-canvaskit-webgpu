@@ -46,9 +46,9 @@ new = """} else {
   _cc = cc
   _cxx = cxx
   if (current_os == "wasm") {
-    # skia_emsdk_dir is declared in gn/toolchain/wasm.gni (global build arg).
-    _cc = skia_emsdk_dir + "/upstream/emscripten/emcc"
-    _cxx = skia_emsdk_dir + "/upstream/emscripten/em++"
+    # Absolute source paths; no build-arg scope needed.
+    _cc = rebase_path("//third_party/externals/emsdk/upstream/emscripten/emcc")
+    _cxx = rebase_path("//third_party/externals/emsdk/upstream/emscripten/em++")
   }
   _dawn_lib_name = "libdawn_combined.a\""""
 assert old in src, "dawn BUILD.gn anchor not found; upstream changed the file"
