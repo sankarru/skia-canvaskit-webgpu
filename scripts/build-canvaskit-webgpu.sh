@@ -259,12 +259,47 @@ python3 bin/activate-emsdk
 # shellcheck disable=SC1091
 source third_party/externals/emsdk/emsdk_env.sh
 
-# NOTE on caching: sccache was tried and REMOVED (2026-09-05). It injects
-# -fdiagnostics-color=always into clang's argv, which is fatal when assembling
-# (.s) under -Werror (Dawn's struct_info sysroot build). Proven by A/B runs:
-# with wrapper → color error; without → struct_info passes. Speedups now come
-# from the out/canvaskit_wasm build-dir cache in CI (ninja objects; absolute
-# paths are stable across runs) plus warm-deps for DEPS sources.
+# ---- 3. Emscripten from DEPS ----
+python3 bin/activate-emsdk
+# shellcheck disable=SC1091
+source third_party/externals/emsdk/emsdk_env.sh
+
+# ---- 3b. ccache as Emscripten compiler wrapper ----
+# sccache was tried and REMOVED: it injects -fdiagnostics-color=always into
+# clang's argv, fatal for assembler paths under -Werror (Dawn struct_info).
+# ccache only preserves client flags (never injects), so it is safe here.
+# (Filament's "no ccache" rule is about cmake picking /usr/bin/ccache as the
+# COMPILER; we invoke it solely as emcc's COMPILER_WRAPPER, so detection is
+# unaffected.) Cache dir persists via CI (CCACHE_DIR below).
+if [ "${USE_CCACHE:-true}" = "true" ]; then
+  if command -v ccache >/dev/null 2>&1; then
+    export EM_CONFIG="$EMSDK/.emscripten"
+    export CCACHE_DIR="${CCACHE_DIR:-$HOME/.cache/ccache}"
+    export CCACHE_MAXSIZE="${CCACHE_MAXSIZE:-4G}"
+    export CCACHE_COMPRESS="${CCACHE_COMPRESS:-true}"
+    export CCACHE_SLOPPINESS="time_macros"
+    python3 - <<'EOF'
+import pathlib, os, re
+cfg = pathlib.Path(os.environ["EM_CONFIG"])
+src = cfg.read_text()
+line = "COMPILER_WRAPPER = 'ccache'"
+if "COMPILER_WRAPPER" in src:
+    src = re.sub(r"(?m)^#?\s*COMPILER_WRAPPER\s*=.*$", line, src)
+else:
+    src = src.rstrip("\n") + "\n" + line + "\n"
+cfg.write_text(src)
+print("emcc wrapper:", [l for l in src.splitlines() if "COMPILER_WRAPPER" in l])
+EOF
+    ccache -z >/dev/null 2>&1 || true
+    echo 'int ccache_warmup(void){return 42;}' > /tmp/ccache_warmup.c
+    emcc -c /tmp/ccache_warmup.c -o /tmp/ccache_warmup.o
+    echo "--- ccache stats after warmup (files/direct hits must be >= 0, misses >= 1) ---"
+    ccache -s | grep -E "cache (hit|miss)|files in cache|Cache size" || ccache -s || true
+    echo "ccache enabled via COMPILER_WRAPPER"
+  else
+    echo "WARNING: ccache not found; install it (apt install ccache) for faster rebuilds"
+  fi
+fi
 
 # Prevent host headers leaking into emscripten (macOS; harmless on Linux)
 unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH || true

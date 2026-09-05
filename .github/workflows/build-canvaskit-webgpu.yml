@@ -84,15 +84,18 @@ jobs:
         working-directory: ${{ env.SKIA_DIR }}
         run: python3 tools/git-sync-deps
 
-      # NOTE: no out/ (ninja objects) cache, deliberately. On ephemeral
-      # runners every run starts with a fresh checkout, so ALL sources are
-      # newer than any restored objects and ninja rebuilds everything anyway
-      # (verified: full-length builds every time despite save/restore
-      # succeeding). Object caching here would only add tar churn. Real
-      # speedups come from warm-deps (content-based, works) and, once green,
-      # a self-hosted runner with a persistent workspace for true incrementals.
-      # sccache was also tried and removed: it injects -fdiagnostics-color
-      # into clang's argv, fatal for assembler paths under -Werror.
+      - name: Ensure ccache present
+        run: command -v ccache >/dev/null || sudo apt-get install -y -qq ccache
+
+      # ccache (content-hashed objects): warm across runs even on ephemeral
+      # runners, unlike ninja mtimes. Keyed loosely — entries self-key on
+      # content+flags. Saved always (even on failure) to bank partials.
+      - name: Cache ccache dir
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-v1-${{ env.SKIA_SHORT }}-${{ inputs.enable_pdf }}-${{ inputs.enable_svg }}-${{ inputs.enable_particles }}
+          restore-keys: ccache-v1-
 
       - name: Build CanvasKit WebGPU
         working-directory: ${{ env.SKIA_DIR }}
@@ -101,6 +104,17 @@ jobs:
           ENABLE_SVG: ${{ inputs.enable_svg && 'true' || 'false' }}
           ENABLE_PARTICLES: ${{ inputs.enable_particles && 'true' || 'false' }}
         run: bash "$GITHUB_WORKSPACE/repo/scripts/build-canvaskit-webgpu.sh"
+
+      - name: ccache stats (always, proves engagement)
+        if: always()
+        run: ccache -s || true
+
+      - name: Save ccache dir (bank partials even on failure)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-v1-${{ env.SKIA_SHORT }}-${{ inputs.enable_pdf }}-${{ inputs.enable_svg }}-${{ inputs.enable_particles }}
 
       # Diagnostic (temporary): the Dawn Emscripten headers are generated
       # content — upload them even on failure so header issues are debuggable

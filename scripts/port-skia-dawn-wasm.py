@@ -129,19 +129,12 @@ remove_em_ifelse(
 
 # -------------------------------------------------------- DawnQueueManager
 # AsyncWait submission class (predates wgpu::Future on wasm) -> Future version.
-# NOTE: plain #if...#endif (no #else): custom removal.
-p = D / "DawnQueueManager.cpp"
-src = p.read_text()
-m = re.search(
-    r"#if defined\(__EMSCRIPTEN__\)\n// GpuWorkSubmission with AsyncWait\.", src
+# Layout is #if EM / AsyncWait / #else / Future / #endif: standard removal.
+remove_em_ifelse(
+    "DawnQueueManager.cpp",
+    r"#if defined\(__EMSCRIPTEN__\)\n// GpuWorkSubmission with AsyncWait\.",
+    "em-class",
 )
-check(m is not None, "DawnQueueManager.cpp [em-class]: start anchor missing")
-if m is not None:
-    e = re.search(r"#endif  // defined\(__EMSCRIPTEN__\)\n\} // namespace", src[m.start():])
-    check(e is not None, "DawnQueueManager.cpp [em-class]: end anchor missing")
-    if e is not None:
-        p.write_text(src[: m.start()] + "} // namespace" + src[m.start() + e.end():])
-        print("patched DawnQueueManager.cpp [em-class]")
 remove_em_ifelse(
     "DawnQueueManager.cpp",
     r"#if defined\(__EMSCRIPTEN__\)\n"
