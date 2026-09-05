@@ -213,44 +213,19 @@ python3 bin/activate-emsdk
 # shellcheck disable=SC1091
 source third_party/externals/emsdk/emsdk_env.sh
 
-# ---- 3b. sccache as Emscripten compiler wrapper ----
-# emcc does NOT read EM_COMPILER_WRAPPER from the environment; the wrapper
-# comes from the emscripten config file (COMPILER_WRAPPER) or the
-# --compiler-wrapper flag. Write it into $EMSDK/.emscripten so every emcc
-# (ninja, cmake, warmup) goes through sccache with zero GN changes.
-if [ "$USE_SCCACHE" = "true" ]; then
-  if command -v sccache >/dev/null 2>&1; then
-    # TEMPORARILY DISABLED (2026-09-05): sccache is the last suspect standing
-    # for injecting -fdiagnostics-color into clang's argv (emcc/cmake/env all
-    # exonerated from source). This run tests the build with a bare clang
-    # path: if struct_info64 passes, sccache-color is confirmed and caching
-    # gets re-enabled with color contained. Wrapper config deliberately NOT
-    # written; EM_CONFIG export retained (harmless, keeps emcc on the same
-    # config file).
-    export EM_CONFIG="$EMSDK/.emscripten"
-    echo "sccache wrapper DISABLED for this run (diagnostic)"
-    echo 'int sccache_warmup(void){return 42;}' > /tmp/sccache_warmup.c
-    # Baseline: bare emcc compile must succeed; stats stay 0 by design.
-    emcc -c /tmp/sccache_warmup.c -o /tmp/sccache_warmup.o
-    echo "warmup (no wrapper) done"
-    echo "sccache enabled via COMPILER_WRAPPER in .emscripten config"
-  else
-    echo "WARNING: USE_SCCACHE=true but sccache not on PATH; building uncached"
-  fi
-fi
+# NOTE on caching: sccache was tried and REMOVED (2026-09-05). It injects
+# -fdiagnostics-color=always into clang's argv, which is fatal when assembling
+# (.s) under -Werror (Dawn's struct_info sysroot build). Proven by A/B runs:
+# with wrapper → color error; without → struct_info passes. Speedups now come
+# from the out/canvaskit_wasm build-dir cache in CI (ninja objects; absolute
+# paths are stable across runs) plus warm-deps for DEPS sources.
 
 # Prevent host headers leaking into emscripten (macOS; harmless on Linux)
 unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH || true
 
-# Dawn's struct_info codegen (via Emscripten's gen_struct_info.py, which
-# hardcodes -Werror) trips on "-Wunused-command-line-argument" noise
-# (a -fdiagnostics-color flag reaching the assembler when Emscripten builds
-# its wasm64 compiler-rt sysroot). Downgrade just that warning class; every
-# other -Werror stays fatal. EMCC_CFLAGS is honored by every emcc invocation.
+# Belt and braces (harmless without sccache): keep the unused-arg downgrade
+# for any -Werror assembler path in Emscripten tooling.
 export EMCC_CFLAGS="-Wno-error=unused-command-line-argument"
-# DIAGNOSTIC (temporary): log emcc's inner clang invocations so the log shows
-# exactly who adds -fdiagnostics-color and whether sccache is in the chain.
-export EMCC_DEBUG=1
 
 # ---- 4. Build ----
 bash modules/canvaskit/compile.sh webgpu

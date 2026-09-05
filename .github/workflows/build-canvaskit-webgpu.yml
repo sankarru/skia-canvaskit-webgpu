@@ -34,14 +34,11 @@ on:
         required: false
         type: boolean
         default: true
-      use_sccache:
-        description: 'Cache C++ compiles with sccache (warm rebuilds much faster)'
-        required: false
-        type: boolean
-        default: true
 
 env:
   SKIA_DIR: ${{ github.workspace }}/skia
+  # Bump to discard the out/ cache (stale objects, poisoned CMakeCache, ...).
+  CACHE_VERSION: v1
 
 jobs:
   build:
@@ -73,6 +70,7 @@ jobs:
           cd "$SKIA_DIR"
           git rev-parse HEAD > "$GITHUB_WORKSPACE/SKIA_SHA"
           cat "$GITHUB_WORKSPACE/SKIA_SHA"
+          echo "SKIA_SHORT=$(cut -c1-12 "$GITHUB_WORKSPACE/SKIA_SHA")" >> "$GITHUB_ENV"
           python3 -c "import re; d=open('DEPS').read(); m=re.search(r\"'dawn_revision': '([0-9a-f]{40})'\", d); print('dawn:', m.group(1) if m else 'n/a')"
 
       - name: Cache third_party (DEPS externals + Emscripten)
@@ -86,13 +84,16 @@ jobs:
         working-directory: ${{ env.SKIA_DIR }}
         run: python3 tools/git-sync-deps
 
-      - name: Setup sccache
-        if: ${{ inputs.use_sccache }}
-        uses: mozilla-actions/sccache-action@v0.0.11
+      # Build-dir cache (ninja objects): absolute paths are stable across
+      # runs (same repo/branch/workspace layout), so ninja resumes
+      # incrementally. Keyed on Skia SHA + feature inputs; warm-deps keeps
+      # third_party warm, this keeps compiled objects warm.
+      - name: Cache build dir
+        uses: actions/cache@v4
         with:
-          variant: sccache
-        env:
-          SCCACHE_CACHE_SIZE: 3G
+          path: ${{ env.SKIA_DIR }}/out/canvaskit_wasm
+          key: ckout-${{ env.CACHE_VERSION }}-${{ env.SKIA_SHORT }}-${{ inputs.enable_pdf }}-${{ inputs.enable_svg }}-${{ inputs.enable_particles }}
+          restore-keys: ckout-${{ env.CACHE_VERSION }}-
 
       - name: Build CanvasKit WebGPU
         working-directory: ${{ env.SKIA_DIR }}
@@ -100,12 +101,17 @@ jobs:
           ENABLE_PDF: ${{ inputs.enable_pdf && 'true' || 'false' }}
           ENABLE_SVG: ${{ inputs.enable_svg && 'true' || 'false' }}
           ENABLE_PARTICLES: ${{ inputs.enable_particles && 'true' || 'false' }}
-          USE_SCCACHE: ${{ inputs.use_sccache && 'true' || 'false' }}
         run: bash "$GITHUB_WORKSPACE/repo/scripts/build-canvaskit-webgpu.sh"
 
-      - name: sccache stats
+      # Bank partial progress even when the build fails (post-step save is
+      # skipped on failure). Ninja is crash-consistent; stale objects rebuild
+      # on content change. Bump CACHE_VERSION if a cache ever goes poison.
+      - name: Save build dir cache
         if: always()
-        run: sccache --show-stats || true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.SKIA_DIR }}/out/canvaskit_wasm
+          key: ckout-${{ env.CACHE_VERSION }}-${{ env.SKIA_SHORT }}-${{ inputs.enable_pdf }}-${{ inputs.enable_svg }}-${{ inputs.enable_particles }}
 
       - name: Smoke check output
         run: |
