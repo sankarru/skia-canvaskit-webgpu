@@ -206,6 +206,18 @@ tsrc = tsrc.replace(old_guard,
                     "{%- if 'dawn' in enabled_tags and 'native' in enabled_tags %}")
 t.write_text(tsrc)
 print("api.h: emscripten guard now requires native tag")
+
+# Same guard lives in the C++ templates (vanilla webgpu_cpp.h /
+# webgpu_cpp_chained_struct.h must keep it; EM output must not have it).
+# api_cpp_print.h and the rest have no such guard (verified).
+for _name in ["api_cpp.h", "api_cpp_chained_struct.h"]:
+    _p = pathlib.Path("third_party/externals/dawn/generator/templates") / _name
+    _s = _p.read_text()
+    _old = "{% if 'dawn' in enabled_tags %}"
+    assert _s.count(_old) == 1, f"{_name} guard anchor not unique/found"
+    _p.write_text(_s.replace(
+        _old, "{% if 'dawn' in enabled_tags and 'native' in enabled_tags %}"))
+    print(f"{_name}: emscripten guard now requires native tag")
 EOF
 # ---- 1h. Skia must include Dawn's EM headers, not Emscripten's bundled ones
 # dawn_api_config sets include_dirs=[] for canvaskit ("Emscripten includes its
