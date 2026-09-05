@@ -56,7 +56,22 @@ p.write_text(src.replace(old, new))
 print("dawn BUILD.gn: wasm cc/cxx forced to emcc/em++")
 EOF
 
-# ---- 2. Extra GN features not covered by compile.sh flags ----
+# ---- 1c. Give Dawn its Emdawnwebgpu headers (vendored in Dawn itself) ----
+# cmake_utils.py hardcodes -DDAWN_EMDAWNWEBGPU_DIR=NOT_SYNCED_BY_SKIA, but
+# current Dawn *requires* these headers for wasm builds: its generated
+# webgpu.h errors with "Use the headers provided by Emdawnwebgpu instead".
+# Dawn vendors the package at third_party/emdawnwebgpu (committed files,
+# not a submodule), so point CMake at it like the other verified deps.
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("third_party/dawn/cmake_utils.py")
+src = p.read_text()
+old = '"-DDAWN_EMDAWNWEBGPU_DIR=NOT_SYNCED_BY_SKIA",'
+new = """f"-DDAWN_EMDAWNWEBGPU_DIR={verify_and_get('dawn/third_party/emdawnwebgpu')}\","""
+assert old in src, "cmake_utils.py anchor not found; upstream changed the file"
+p.write_text(src.replace(old, new))
+print("cmake_utils.py: DAWN_EMDAWNWEBGPU_DIR -> vendored copy")
+EOF
 # compile.sh webgpu already enables: graphite, webgpu/dawn, skottie,
 # paragraph (+harfbuzz/icu shaper), skshaper, pathops, canvas+matrix
 # bindings, fonts (+embedded), woff2, jpeg/png/webp decode+encode,
