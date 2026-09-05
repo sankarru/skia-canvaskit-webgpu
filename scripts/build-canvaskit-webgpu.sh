@@ -250,7 +250,11 @@ p.write_text(src.replace(old, new))
 print("dawn_api_config: canvaskit uses Dawn EM headers")
 EOF
 
-# ---- 3. Emscripten from DEPS ----
+# ---- 1i. Port Skia's Dawn backend to current Dawn API (wasm) ----
+# Upstream Skia carries stale __EMSCRIPTEN__ branches written against Dawn's
+# removed C API. The unified C++ API works on Emscripten, so drop the stale
+# branches. Assert-anchored: fails loud if upstream migrates these itself.
+python3 "$REPO_DIR/scripts/port-skia-dawn-wasm.py" "$SKIA_DIR"
 python3 bin/activate-emsdk
 # shellcheck disable=SC1091
 source third_party/externals/emsdk/emsdk_env.sh
