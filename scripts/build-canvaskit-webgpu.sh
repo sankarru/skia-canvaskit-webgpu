@@ -172,31 +172,19 @@ source third_party/externals/emsdk/emsdk_env.sh
 # (ninja, cmake, warmup) goes through sccache with zero GN changes.
 if [ "$USE_SCCACHE" = "true" ]; then
   if command -v sccache >/dev/null 2>&1; then
-    # emcc reads ONLY its config file for the wrapper (env is ignored), and
-    # it locates that file via EM_CONFIG else ~/.emscripten — pin it to the
-    # file we edit so the wrapper is guaranteed active.
+    # TEMPORARILY DISABLED (2026-09-05): sccache is the last suspect standing
+    # for injecting -fdiagnostics-color into clang's argv (emcc/cmake/env all
+    # exonerated from source). This run tests the build with a bare clang
+    # path: if struct_info64 passes, sccache-color is confirmed and caching
+    # gets re-enabled with color contained. Wrapper config deliberately NOT
+    # written; EM_CONFIG export retained (harmless, keeps emcc on the same
+    # config file).
     export EM_CONFIG="$EMSDK/.emscripten"
-    python3 - <<'EOF'
-import pathlib, os, re
-cfg = pathlib.Path(os.environ["EM_CONFIG"])
-src = cfg.read_text()
-line = "COMPILER_WRAPPER = 'sccache'"
-if "COMPILER_WRAPPER" in src:
-    src = re.sub(r"(?m)^#?\s*COMPILER_WRAPPER\s*=.*$", line, src)
-else:
-    src = src.rstrip("\n") + "\n" + line + "\n"
-cfg.write_text(src)
-print("emcc config:", os.environ["EM_CONFIG"])
-print([l for l in src.splitlines() if "COMPILER_WRAPPER" in l])
-EOF
-    # Start server loudly (no suppression: a dead server = silent no-cache).
-    sccache --stop-server >/dev/null 2>&1 || true
-    sccache --start-server
+    echo "sccache wrapper DISABLED for this run (diagnostic)"
     echo 'int sccache_warmup(void){return 42;}' > /tmp/sccache_warmup.c
-    # One real emcc clang compile through the wrapper; stats must show ≥1.
+    # Baseline: bare emcc compile must succeed; stats stay 0 by design.
     emcc -c /tmp/sccache_warmup.c -o /tmp/sccache_warmup.o
-    echo "--- sccache stats after warmup (Compilations must be >= 1) ---"
-    sccache --show-stats | grep -E "Compilations|Cache hits|Cache misses|Cache hits rate" || true
+    echo "warmup (no wrapper) done"
     echo "sccache enabled via COMPILER_WRAPPER in .emscripten config"
   else
     echo "WARNING: USE_SCCACHE=true but sccache not on PATH; building uncached"
