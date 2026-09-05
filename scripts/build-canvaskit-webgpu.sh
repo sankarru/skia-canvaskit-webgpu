@@ -13,6 +13,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENABLE_PDF="${ENABLE_PDF:-true}"
 ENABLE_SVG="${ENABLE_SVG:-true}"
 ENABLE_PARTICLES="${ENABLE_PARTICLES:-true}"
+USE_SCCACHE="${USE_SCCACHE:-false}"
 
 cd "$SKIA_DIR"
 
@@ -62,6 +63,20 @@ grep -nE 'skia_enable_(pdf|svg|particles|skottie|graphite)|skia_use_(dawn|webgpu
 python3 bin/activate-emsdk
 # shellcheck disable=SC1091
 source third_party/externals/emsdk/emsdk_env.sh
+
+# ---- 3b. sccache as Emscripten compiler wrapper (documented EM_COMPILER_WRAPPER
+# path: emcc calls sccache->clang internally, so the cache survives emcc driver
+# changes and works without touching GN's cc_wrapper) ----
+if [ "$USE_SCCACHE" = "true" ]; then
+  if command -v sccache >/dev/null 2>&1; then
+    export EM_COMPILER_WRAPPER=sccache
+    sccache --start-server 2>/dev/null || true
+    sccache --show-stats || true
+    echo "sccache enabled via EM_COMPILER_WRAPPER"
+  else
+    echo "WARNING: USE_SCCACHE=true but sccache not on PATH; building uncached"
+  fi
+fi
 
 # Prevent host headers leaking into emscripten (macOS; harmless on Linux)
 unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH || true

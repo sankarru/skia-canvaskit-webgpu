@@ -34,6 +34,11 @@ on:
         required: false
         type: boolean
         default: true
+      use_sccache:
+        description: 'Cache C++ compiles with sccache (warm rebuilds much faster)'
+        required: false
+        type: boolean
+        default: true
 
 env:
   SKIA_DIR: ${{ github.workspace }}/skia
@@ -70,9 +75,24 @@ jobs:
           cat "$GITHUB_WORKSPACE/SKIA_SHA"
           python3 -c "import re; d=open('DEPS').read(); m=re.search(r\"'dawn_revision': '([0-9a-f]{40})'\", d); print('dawn:', m.group(1) if m else 'n/a')"
 
-      - name: Sync DEPS (Dawn, ICU, harfbuzz, emsdk pins...)
+      - name: Cache third_party (DEPS externals + Emscripten)
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.SKIA_DIR }}/third_party
+          key: deps-${{ hashFiles('skia/DEPS') }}
+          restore-keys: deps-
+
+      - name: Re-sync DEPS on top of cache
         working-directory: ${{ env.SKIA_DIR }}
         run: python3 tools/git-sync-deps
+
+      - name: Setup sccache
+        if: ${{ inputs.use_sccache }}
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          variant: sccache
+        env:
+          SCCACHE_CACHE_SIZE: 3G
 
       - name: Build CanvasKit WebGPU
         working-directory: ${{ env.SKIA_DIR }}
@@ -80,7 +100,12 @@ jobs:
           ENABLE_PDF: ${{ inputs.enable_pdf && 'true' || 'false' }}
           ENABLE_SVG: ${{ inputs.enable_svg && 'true' || 'false' }}
           ENABLE_PARTICLES: ${{ inputs.enable_particles && 'true' || 'false' }}
+          USE_SCCACHE: ${{ inputs.use_sccache && 'true' || 'false' }}
         run: bash "$GITHUB_WORKSPACE/repo/scripts/build-canvaskit-webgpu.sh"
+
+      - name: sccache stats
+        if: ${{ inputs.use_sccache }}
+        run: sccache --show-stats || true
 
       - name: Smoke check output
         run: |
