@@ -104,7 +104,7 @@ jobs:
         run: bash "$GITHUB_WORKSPACE/repo/scripts/build-canvaskit-webgpu.sh"
 
       - name: sccache stats
-        if: ${{ inputs.use_sccache }}
+        if: always()
         run: sccache --show-stats || true
 
       - name: Smoke check output

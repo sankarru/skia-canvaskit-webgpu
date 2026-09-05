@@ -94,8 +94,14 @@ source third_party/externals/emsdk/emsdk_env.sh
 if [ "$USE_SCCACHE" = "true" ]; then
   if command -v sccache >/dev/null 2>&1; then
     export EM_COMPILER_WRAPPER=sccache
-    sccache --start-server 2>/dev/null || true
-    sccache --show-stats || true
+    # Start server loudly (no suppression: a dead server = silent no-cache).
+    sccache --stop-server >/dev/null 2>&1 || true
+    sccache --start-server
+    echo 'int sccache_warmup(void){return 42;}' > /tmp/sccache_warmup.c
+    # One real emcc clang compile through the wrapper; stats must show ≥1.
+    emcc -c /tmp/sccache_warmup.c -o /tmp/sccache_warmup.o
+    echo "--- sccache stats after warmup (Compilations must be >= 1) ---"
+    sccache --show-stats | grep -E "Compilations|Cache hits|Cache misses|Cache hits rate" || true
     echo "sccache enabled via EM_COMPILER_WRAPPER"
   else
     echo "WARNING: USE_SCCACHE=true but sccache not on PATH; building uncached"
