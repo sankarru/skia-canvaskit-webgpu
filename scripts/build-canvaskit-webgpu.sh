@@ -178,6 +178,36 @@ p.write_text(src.replace(old, new))
 print("build_dawn.py: wasm headers copied from emdawnwebgpu layout")
 EOF
 
+# ---- 1g. Emscripten headers must include Dawn-tagged API ----
+# Dawn's generator renders emdawnwebgpu headers with enabled_tags=['emscripten']
+# only, dropping everything tagged 'dawn' (16-bit formats, feature tiers,
+# wgpu::Status...). Skia main's __EMSCRIPTEN__ branches REQUIRE those names,
+# so the EM headers are unusable as generated. Widen to match the vanilla
+# set minus 'native' (desktop-only). The api.h __EMSCRIPTEN__ guard is keyed
+# off 'native' presence so vanilla keeps its guard and EM stays clean:
+#   vanilla (dawn+emscripten+native+deprecated): guard ON (unchanged)
+#   emscripten (emscripten+dawn+deprecated):     guard OFF (fixed)
+python3 - <<'EOF'
+import pathlib
+g = pathlib.Path("third_party/externals/dawn/generator/dawn_json_generator.py")
+src = g.read_text()
+old_tags = "enabled_tags=['emscripten'])"
+assert src.count(old_tags) >= 2, f"expected >=2 EM tag sites, found {src.count(old_tags)}"
+src = src.replace(old_tags,
+                  "enabled_tags=['emscripten', 'dawn', 'deprecated'])")
+g.write_text(src)
+print("dawn_json_generator.py: EM tags widened (headers + modules)")
+
+t = pathlib.Path("third_party/externals/dawn/generator/templates/api.h")
+tsrc = t.read_text()
+old_guard = "{%- if 'dawn' in enabled_tags %}"
+assert tsrc.count(old_guard) == 1, "api.h guard anchor not unique/found"
+tsrc = tsrc.replace(old_guard,
+                    "{%- if 'dawn' in enabled_tags and 'native' in enabled_tags %}")
+t.write_text(tsrc)
+print("api.h: emscripten guard now requires native tag")
+EOF
+
 # ---- 3. Emscripten from DEPS ----
 python3 bin/activate-emsdk
 # shellcheck disable=SC1091
