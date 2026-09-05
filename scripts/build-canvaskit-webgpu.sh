@@ -98,6 +98,42 @@ fi
 # (Still no upstream JS bindings for it — same caveat as SVG/PDF.)
 grep -nE 'skia_enable_(pdf|svg|particles|skottie|graphite)|skia_use_(dawn|webgpu)=' "$CS"
 
+# ---- 1d. Build Dawn with Emscripten's toolchain file (not SYSTEM_NAME=wasm) ----
+# Dawn keys its entire Emscripten path (emdawnwebgpu headers shadowing the
+# vanilla generated ones) off the EMSCRIPTEN cmake var, which is only set by
+# Emscripten's toolchain file. -DCMAKE_SYSTEM_NAME=wasm leaves EMSCRIPTEN=0
+# while emcc still defines __EMSCRIPTEN__, tripping the guard in
+# gen/include/dawn/webgpu.h ("Use the headers provided by Emdawnwebgpu").
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("third_party/dawn/build_dawn.py")
+src = p.read_text()
+old_sys = """      f"-DCMAKE_SYSTEM_NAME={target_os}",
+      f"-DCMAKE_SYSTEM_PROCESSOR={target_cpu}",
+"""
+assert old_sys in src, "build_dawn.py SYSTEM lines anchor missing"
+src = src.replace(old_sys, "")
+old_loc = "  configure_cmd += get_third_party_locations()\n"
+assert old_loc in src, "build_dawn.py locations anchor missing"
+new_loc = """  if target_os == "wasm":
+    _emsdk = os.environ.get("EMSDK", "")
+    assert _emsdk, "EMSDK env var required for wasm Dawn build (source emsdk_env.sh)"
+    configure_cmd += [
+        "-DCMAKE_TOOLCHAIN_FILE=" + os.path.join(
+            _emsdk, "upstream", "emscripten", "cmake", "Modules",
+            "Platform", "Emscripten.cmake"),
+    ]
+  else:
+    configure_cmd += [
+        f"-DCMAKE_SYSTEM_NAME={target_os}",
+        f"-DCMAKE_SYSTEM_PROCESSOR={target_cpu}",
+    ]
+  configure_cmd += get_third_party_locations()
+"""
+p.write_text(src.replace(old_loc, new_loc))
+print("build_dawn.py: wasm uses Emscripten toolchain file")
+EOF
+
 # ---- 3. Emscripten from DEPS ----
 python3 bin/activate-emsdk
 # shellcheck disable=SC1091
