@@ -206,6 +206,13 @@ fi
 # Prevent host headers leaking into emscripten (macOS; harmless on Linux)
 unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH || true
 
+# Dawn's struct_info codegen (via Emscripten's gen_struct_info.py, which
+# hardcodes -Werror) trips on "-Wunused-command-line-argument" noise
+# (a -fdiagnostics-color flag reaching the assembler when Emscripten builds
+# its wasm64 compiler-rt sysroot). Downgrade just that warning class; every
+# other -Werror stays fatal. EMCC_CFLAGS is honored by every emcc invocation.
+export EMCC_CFLAGS="-Wno-error=unused-command-line-argument"
+
 # ---- 4. Build ----
 bash modules/canvaskit/compile.sh webgpu
 
