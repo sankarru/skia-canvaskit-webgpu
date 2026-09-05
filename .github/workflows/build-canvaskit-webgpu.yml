@@ -113,6 +113,7 @@ jobs:
           path: |
             ${{ env.SKIA_DIR }}/out/canvaskit_wasm/gen/third_party/dawn/include
             ${{ env.SKIA_DIR }}/out/canvaskit_wasm/cmake_dawn/gen/src/emdawnwebgpu/include
+            ${{ env.SKIA_DIR }}/out/canvaskit_wasm/obj/src/gpu/graphite/dawn/*.d
           retention-days: 7
           if-no-files-found: warn
 
