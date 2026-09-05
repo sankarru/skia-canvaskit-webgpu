@@ -207,6 +207,36 @@ tsrc = tsrc.replace(old_guard,
 t.write_text(tsrc)
 print("api.h: emscripten guard now requires native tag")
 EOF
+# ---- 1h. Skia must include Dawn's EM headers, not Emscripten's bundled ones
+# dawn_api_config sets include_dirs=[] for canvaskit ("Emscripten includes its
+# own WebGPU headers"), so Skia compiles against emsdk's stale subset (no
+# Status, no 16-bit formats, no feature tiers...). Point it at Dawn's own
+# generated Emscripten headers first (copied by build_dawn.py), then Dawn
+# sources for the redirectors. Gen dir first so it shadows the emsdk copy.
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("third_party/dawn/BUILD.gn")
+src = p.read_text()
+old = """  } else {
+    # Emscripten includes its own WebGPU headers.
+    include_dirs = []
+  }
+  if (is_win) {"""
+assert src.count(old) == 1, "dawn_api_config anchor not unique/found"
+new = """  } else {
+    # CanvasKit-on-Dawn: Emscripten's bundled WebGPU headers are too old for
+    # Skia's Graphite backend (missing Status, 16-bit formats, feature
+    # tiers...). Use Dawn's generated Emscripten headers instead.
+    include_dirs = [
+      "$root_gen_dir/third_party/dawn/include",
+      "../externals/dawn",
+      "../externals/dawn/include",
+    ]
+  }
+  if (is_win) {"""
+p.write_text(src.replace(old, new))
+print("dawn_api_config: canvaskit uses Dawn EM headers")
+EOF
 
 # ---- 3. Emscripten from DEPS ----
 python3 bin/activate-emsdk
