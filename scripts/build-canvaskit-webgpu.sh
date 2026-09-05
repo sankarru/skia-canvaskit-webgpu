@@ -122,6 +122,11 @@ new_loc = """  if target_os == "wasm":
         "-DCMAKE_TOOLCHAIN_FILE=" + os.path.join(
             _emsdk, "upstream", "emscripten", "cmake", "Modules",
             "Platform", "Emscripten.cmake"),
+        # CMake>=3.24 injects -fdiagnostics-color=always into every compile
+        # (Ninja default). Harmless for .c/.cc, but assembling compiler-rt's
+        # .s during emscripten sysroot builds warns "argument unused" — and
+        # Dawn's struct_info step uses -Werror. Turn color off entirely.
+        "-DCMAKE_COLOR_DIAGNOSTICS=OFF",
     ]
   else:
     configure_cmd += [
