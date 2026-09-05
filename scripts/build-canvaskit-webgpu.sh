@@ -28,6 +28,34 @@ if [ -f "$REPO_DIR/patches/dawn-tint.patch" ]; then
   fi
 fi
 
+# ---- 1b. Dawn must be compiled with Emscripten, not host cc/c++ ----
+# third_party/dawn/BUILD.gn sets _cc/_cxx from file-scope cc/cxx, which
+# arrive as literal "cc"/"c++" for the wasm toolchain on current main.
+# That makes Dawn's CMake configure host-GCC builds (and chokes on C++20
+# modules). Force emcc/em++ when targeting wasm. Host tint build is
+# untouched (guarded by current_os).
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("third_party/dawn/BUILD.gn")
+src = p.read_text()
+old = """} else {
+  _cc = cc
+  _cxx = cxx
+}"""
+new = """} else {
+  _cc = cc
+  _cxx = cxx
+  if (current_os == "wasm") {
+    # skia_emsdk_dir is declared in gn/toolchain/wasm.gni (global build arg).
+    _cc = skia_emsdk_dir + "/upstream/emscripten/emcc"
+    _cxx = skia_emsdk_dir + "/upstream/emscripten/em++"
+  }
+}"""
+assert old in src, "dawn BUILD.gn anchor not found; upstream changed the file"
+p.write_text(src.replace(old, new))
+print("dawn BUILD.gn: wasm cc/cxx forced to emcc/em++")
+EOF
+
 # ---- 2. Extra GN features not covered by compile.sh flags ----
 # compile.sh webgpu already enables: graphite, webgpu/dawn, skottie,
 # paragraph (+harfbuzz/icu shaper), skshaper, pathops, canvas+matrix
@@ -49,14 +77,10 @@ if [ "$ENABLE_SVG" = "true" ]; then
     sed -i 's|skia_enable_skottie=${ENABLE_SKOTTIE} \\|skia_enable_skottie=${ENABLE_SKOTTIE} \\\n  skia_enable_svg=true \\|' "$CS"
   fi
 fi
-if [ "$ENABLE_PARTICLES" = "true" ]; then
-  # NOTE: same caveat — no upstream particles JS bindings; lib compiled in.
-  if grep -q 'skia_enable_particles' "$CS"; then
-    sed -i 's/skia_enable_particles=false/skia_enable_particles=true/' "$CS"
-  else
-    sed -i 's|skia_enable_skottie=${ENABLE_SKOTTIE} \\|skia_enable_skottie=${ENABLE_SKOTTIE} \\\n  skia_enable_particles=true \\|' "$CS"
-  fi
-fi
+# NOTE: skia_enable_particles does not exist on current main (GN warns
+# "never appeared in a declare_args block") — the particles module builds
+# as part of the default skia target, so there is nothing to flip.
+# (Still no upstream JS bindings for it — same caveat as SVG/PDF.)
 grep -nE 'skia_enable_(pdf|svg|particles|skottie|graphite)|skia_use_(dawn|webgpu)=' "$CS"
 
 # ---- 3. Emscripten from DEPS ----
