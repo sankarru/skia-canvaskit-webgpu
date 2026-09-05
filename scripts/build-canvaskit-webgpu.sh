@@ -134,17 +134,50 @@ p.write_text(src.replace(old_loc, new_loc))
 print("build_dawn.py: wasm uses Emscripten toolchain file")
 EOF
 
+# ---- 1e. Dawn has no dawn_proc target under Emscripten ----
+# src/dawn/CMakeLists.txt guards dawn_proc with if(NOT EMSCRIPTEN) — the
+# Emscripten port (emdawnwebgpu) provides the proc table instead. Skia's
+# build_dawn.py hardcodes the target list, so drop dawn_proc for wasm
+# (combine_into_library derives from the same list, so it follows).
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("third_party/dawn/build_dawn.py")
+src = p.read_text()
+old = '  build_targets = ["webgpu_headers_gen", "dawn_proc", "dawn_native"]\n'
+assert old in src, "build_dawn.py targets anchor missing"
+new = old + '''  if target_os == "wasm":
+    build_targets = ["webgpu_headers_gen", "dawn_native"]
+'''
+p.write_text(src.replace(old, new))
+print("build_dawn.py: dawn_proc dropped for wasm")
+EOF
+
 # ---- 3. Emscripten from DEPS ----
 python3 bin/activate-emsdk
 # shellcheck disable=SC1091
 source third_party/externals/emsdk/emsdk_env.sh
 
-# ---- 3b. sccache as Emscripten compiler wrapper (documented EM_COMPILER_WRAPPER
-# path: emcc calls sccache->clang internally, so the cache survives emcc driver
-# changes and works without touching GN's cc_wrapper) ----
+# ---- 3b. sccache as Emscripten compiler wrapper ----
+# emcc does NOT read EM_COMPILER_WRAPPER from the environment; the wrapper
+# comes from the emscripten config file (COMPILER_WRAPPER) or the
+# --compiler-wrapper flag. Write it into $EMSDK/.emscripten so every emcc
+# (ninja, cmake, warmup) goes through sccache with zero GN changes.
 if [ "$USE_SCCACHE" = "true" ]; then
   if command -v sccache >/dev/null 2>&1; then
-    export EM_COMPILER_WRAPPER=sccache
+    python3 - <<'EOF'
+import pathlib, os
+cfg = pathlib.Path(os.environ["EMSDK"]) / ".emscripten"
+src = cfg.read_text()
+line = "COMPILER_WRAPPER = 'sccache'"
+if "COMPILER_WRAPPER" in src:
+    import re
+    src = re.sub(r"(?m)^#?\s*COMPILER_WRAPPER\s*=.*$", line, src)
+else:
+    src = src.rstrip("\n") + "\n" + line + "\n"
+cfg.write_text(src)
+print("emscripten config wrapper set:")
+print([l for l in src.splitlines() if "COMPILER_WRAPPER" in l])
+EOF
     # Start server loudly (no suppression: a dead server = silent no-cache).
     sccache --stop-server >/dev/null 2>&1 || true
     sccache --start-server
@@ -153,7 +186,7 @@ if [ "$USE_SCCACHE" = "true" ]; then
     emcc -c /tmp/sccache_warmup.c -o /tmp/sccache_warmup.o
     echo "--- sccache stats after warmup (Compilations must be >= 1) ---"
     sccache --show-stats | grep -E "Compilations|Cache hits|Cache misses|Cache hits rate" || true
-    echo "sccache enabled via EM_COMPILER_WRAPPER"
+    echo "sccache enabled via COMPILER_WRAPPER in .emscripten config"
   else
     echo "WARNING: USE_SCCACHE=true but sccache not on PATH; building uncached"
   fi
