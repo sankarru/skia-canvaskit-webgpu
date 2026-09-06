@@ -365,9 +365,12 @@ e = src.find(end_marker, m.start())
 assert e != -1, "resource-cache block end anchor missing"
 e += len(end_marker)
 block = src[m.start():e]
-guarded = "#ifdef CK_ENABLE_WEBGL\n" + block
+guarded = (
+    "#ifdef CK_ENABLE_WEBGL\n"
+    + block
     + "#else\n            ;  // terminate class_ chain when WebGL methods are out\n"
     + "#endif  // CK_ENABLE_WEBGL\n"
+)
 src = src[: m.start()] + guarded + src[e:]
 p.write_text(src)
 print("bindings: Ganesh-only resource-cache methods guarded to WebGL")
