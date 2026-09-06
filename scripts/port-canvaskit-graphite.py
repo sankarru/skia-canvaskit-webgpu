@@ -336,6 +336,25 @@ replace_once(
     "holder-bindings",
 )
 
+# ------------------------------------------------------------------ includes
+# (appended last so line numbers above stay stable for review)
+replace_once(
+    """#include <emscripten/html5_webgpu.h>
+#include <webgpu/webgpu.h>
+#include <webgpu/webgpu_cpp.h>""",
+    """#include <webgpu/webgpu.h>
+#include <webgpu/webgpu_cpp.h>
+// NOTE: emsdk's <emscripten/html5_webgpu.h> references the removed
+// WGPUSwapChain type; declare the 3 used shims directly instead (their
+// implementations come from libhtml5_webgpu.js at link time).
+extern "C" {
+WGPUDevice emscripten_webgpu_get_device(void);
+void emscripten_webgpu_release_js_handle(int js_handle);
+WGPUTexture emscripten_webgpu_import_texture(int js_handle);
+}""",
+    "html5-shims",
+)
+
 if FAILURES:
     print(f"\n{len(FAILURES)} hunk(s) failed — upstream moved; rework needed.")
     sys.exit(1)
