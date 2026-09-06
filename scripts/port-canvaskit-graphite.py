@@ -355,6 +355,22 @@ WGPUTexture emscripten_webgpu_import_texture(int js_handle);
     "html5-shims",
 )
 
+# --------------------------------- SkSurface GPU helpers need Ganesh impls --
+# reportBackendTypeIsGPU/sampleCnt/_resetContext call into unbuilt Ganesh
+# code. In Dawn-only builds every SkSurface is raster, so take the
+# CPU-build branch (reportBackendTypeIsGPU=false) instead.
+replace_once(
+    """#ifdef ENABLE_GPU
+            .function("reportBackendTypeIsGPU", optional_override([](SkSurface& self) -> bool {
+                          return self.getCanvas()->recordingContext() != nullptr;
+                      }))""",
+    """#if defined(ENABLE_GPU) && defined(CK_ENABLE_WEBGL)
+            .function("reportBackendTypeIsGPU", optional_override([](SkSurface& self) -> bool {
+                          return self.getCanvas()->recordingContext() != nullptr;
+                      }))""",
+    "surface-gpu-guard",
+)
+
 if FAILURES:
     print(f"\n{len(FAILURES)} hunk(s) failed — upstream moved; rework needed.")
     sys.exit(1)
