@@ -280,43 +280,6 @@ EOF
 # removed C API. The unified C++ API works on Emscripten, so drop the stale
 # branches. Assert-anchored: fails loud if upstream migrates these itself.
 python3 "$REPO_DIR/scripts/port-skia-dawn-wasm.py" "$SKIA_DIR"
-# ---- 1m. Normalize Dawn enum tables for indexOf (.js post-js) ----
-# Dawn emits WebGPU.TextureFormat as an object map ({0:.., 1:..}), but its own
-# glue (and Skia's) calls .indexOf on it (needs a real Array). Normalize at
-# startup. Guarded so upstream fixes (real arrays) pass through untouched.
-# NOTE: keep this python block simple (no nested triple-quotes).
-python3 - <<'EOF'
-import pathlib
-p = pathlib.Path("modules/canvaskit/BUILD.gn")
-fixup = pathlib.Path("modules/canvaskit/dawn_enum_fixup.js")
-lines = [
-    "// Auto-written by skia-canvaskit-webgpu build (see 1m).",
-    "(function() {",
-    "  if (typeof WebGPU === 'undefined') { return; }",
-    '  ["TextureFormat"].forEach(function(name) {',
-    "    var t = WebGPU[name];",
-    "    if (t && !Array.isArray(t)) {",
-    "      var arr = [];",
-    "      Object.keys(t).forEach(function(k) {",
-    "        var i = Number(k);",
-    "        if (Number.isInteger(i) && i >= 0) { arr[i] = t[k]; }",
-    "      });",
-    "      WebGPU[name] = arr;",
-    "    }",
-    "  });",
-    "})();",
-    "",
-]
-fixup.write_text("\n".join(lines))
-src = p.read_text()
-marker = '"--js-library=" + rebase_path('
-assert src.count(marker) >= 1, "js-lib block anchor missing"
-anchor = '              root_build_dir),'
-assert src.count(anchor) == 1, "js-lib end anchor not unique/found"
-src = src.replace(anchor, anchor + '\n      "--post-js",\n      rebase_path("dawn_enum_fixup.js"),')
-p.write_text(src)
-print("canvaskit BUILD.gn: enum-table fixup post-js wired")
-EOF
 # ---- 1j2. Port CanvasKit Dawn bindings Ganesh -> Graphite ----
 # Upstream's CK_ENABLE_WEBGPU bindings target the removed Ganesh-on-Dawn
 # backend (GrDirectContext::MakeDawn no longer exists). Rewrites them around
@@ -411,6 +374,43 @@ guarded = (
 src = src[: m.start()] + guarded + src[e:]
 p.write_text(src)
 print("bindings: Ganesh-only resource-cache methods guarded to WebGL")
+EOF
+# ---- 1m. Normalize Dawn enum tables for indexOf (.js post-js) ----
+# Dawn emits WebGPU.TextureFormat as an object map ({0:.., 1:..}), but its own
+# glue (and Skia's) calls .indexOf on it (needs a real Array). Normalize at
+# startup. Guarded so upstream fixes (real arrays) pass through untouched.
+# NOTE: keep this python block simple (no nested triple-quotes).
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("modules/canvaskit/BUILD.gn")
+fixup = pathlib.Path("modules/canvaskit/dawn_enum_fixup.js")
+lines = [
+    "// Auto-written by skia-canvaskit-webgpu build (see 1m).",
+    "(function() {",
+    "  if (typeof WebGPU === 'undefined') { return; }",
+    '  ["TextureFormat"].forEach(function(name) {',
+    "    var t = WebGPU[name];",
+    "    if (t && !Array.isArray(t)) {",
+    "      var arr = [];",
+    "      Object.keys(t).forEach(function(k) {",
+    "        var i = Number(k);",
+    "        if (Number.isInteger(i) && i >= 0) { arr[i] = t[k]; }",
+    "      });",
+    "      WebGPU[name] = arr;",
+    "    }",
+    "  });",
+    "})();",
+    "",
+]
+fixup.write_text("\n".join(lines))
+src = p.read_text()
+marker = '"--js-library=" + rebase_path('
+assert src.count(marker) >= 1, "js-lib block anchor missing"
+anchor = '              root_build_dir),'
+assert src.count(anchor) == 1, "js-lib end anchor not unique/found"
+src = src.replace(anchor, anchor + '\n      "--post-js",\n      rebase_path("dawn_enum_fixup.js"),')
+p.write_text(src)
+print("canvaskit BUILD.gn: enum-table fixup post-js wired")
 EOF
 # ---- 3. Emscripten from DEPS ----
 python3 bin/activate-emsdk
