@@ -286,40 +286,94 @@ python3 "$REPO_DIR/scripts/port-skia-dawn-wasm.py" "$SKIA_DIR"
 # Graphite (ContextFactory::MakeDawn, per-surface Recorder, explicit
 # snap/insert/submit present). Same JS contract. Assert-anchored.
 python3 "$REPO_DIR/scripts/port-canvaskit-graphite.py" "$SKIA_DIR"
-# ---- 1k. Link Dawn's emdawnwebgpu JS glue, not Emscripten's stale lib ----
-# -sUSE_WEBGPU=1 links Emscripten's libwebgpu.a whose 4 lifecycle functions
-# collide with Dawn's emdawnwebgpu_c objects (duplicate symbols) AND whose
-# struct layouts predate Dawn main (e.g. missing WGPUSurfaceCapabilities.usages
-# -> wrong frees). Drop it; wire Dawn's own JS libraries instead (same rev as
-# the headers/objects, so layouts match by construction). Emscripten's
-# html5_webgpu JS shims (import_*/get_device) still auto-resolve.
+# ---- 1l. Canvaskit target: Dawn EM includes + html5 JS glue + Ganesh guard --
+# (a) canvaskit_bindings resolves webgpu headers via Emscripten's stale subset
+#     (its C++ wrappers are declaration-only there). Point it at Dawn's
+#     generated headers (inline bodies, same rev as the linked objects).
+# (b) emscripten_webgpu_import_texture/release_js_handle/get_device live in
+#     Emscripten's libhtml5_webgpu.js (NOT auto-linked without USE_WEBGPU).
+#     Wire it explicitly by absolute path (baked per-run, deterministic).
+# (c) GrDirectContext::releaseResourcesAndAbandonContext has no implementation
+#     (Ganesh sources unbuilt) — guard its embind registration out.
 python3 - <<'EOF'
 import pathlib
 p = pathlib.Path("modules/canvaskit/BUILD.gn")
 src = p.read_text()
-old = """      "-sUSE_WEBGL2=0",
-      "-sUSE_WEBGPU=1",
-      "-sASYNCIFY","""
-assert src.count(old) == 1, "canvaskit webgpu ldflags anchor not unique/found"
-new = """      "-sUSE_WEBGL2=0",
-      "-sASYNCIFY","""
-src = src.replace(old, new)
-old2 = """      # Modules from html5_webgpu for JS<->WASM interop
-      "-sEXPORTED_RUNTIME_METHODS=WebGPU,JsValStore","""
-assert src.count(old2) == 1, "canvaskit exports anchor not unique/found"
-new2 = """      # Modules from html5_webgpu for JS<->WASM interop
-      "-sEXPORTED_RUNTIME_METHODS=WebGPU,JsValStore",
-
-      # Dawn's own Emscripten JS glue (same rev as headers/objects).
-      # EM gen dir paths are relative to root_build_dir (ninja link cwd).
-      "--js-library=cmake_dawn/gen/src/emdawnwebgpu/library_webgpu_enum_tables.js",
-      "--js-library=cmake_dawn/gen/src/emdawnwebgpu/library_webgpu_generated_sig_info.js",
-      "--js-library=cmake_dawn/gen/src/emdawnwebgpu/library_webgpu_generated_struct_info.js",
-      "--js-library=" + rebase_path(
-              "../../third_party/externals/dawn/third_party/emdawnwebgpu/pkg/webgpu/src/library_webgpu.js",
-              root_build_dir),"""
-p.write_text(src.replace(old2, new2))
-print("canvaskit BUILD.gn: Dawn emdawnwebgpu JS libs wired, USE_WEBGPU dropped")
+old_deps = 'skia_wasm_lib("canvaskit") {\n  deps = [ "../..:skia" ]\n'
+assert src.count(old_deps) == 1, "canvaskit target anchor not unique/found"
+new_deps = old_deps + """  if (skia_canvaskit_enable_webgpu) {
+    # Dawn's generated Emscripten headers (inline C++ bodies). Emscripten's
+    # bundled subset is too old and its native lib is deliberately unlinked.
+    include_dirs = [ "$root_gen_dir/third_party/dawn/include" ]
+  }
+"""
+src = src.replace(old_deps, new_deps)
+old_js = '      "--js-library=cmake_dawn/gen/src/emdawnwebgpu/library_webgpu_generated_struct_info.js",\n'
+assert src.count(old_js) == 1, "js-libs anchor not unique/found"
+emsdk_js = (pathlib.Path.cwd() / "third_party/externals/emsdk/src/lib/libhtml5_webgpu.js")
+assert emsdk_js.exists(), f"html5_webgpu.js missing at {emsdk_js}"
+new_js = old_js + f'      "--js-library={emsdk_js}",\n'
+src = src.replace(old_js, new_js)
+p.write_text(src)
+print("canvaskit BUILD.gn: Dawn includes + html5 JS lib wired")
+EOF
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("modules/canvaskit/canvaskit_bindings.cpp")
+src = p.read_text()
+old = """            .function("_releaseResourcesAndAbandonContext",
+                      &GrDirectContext::releaseResourcesAndAbandonContext)"""
+assert src.count(old) == 1, "releaseResources anchor not unique/found"
+new = """#ifdef CK_ENABLE_WEBGL
+            .function("_releaseResourcesAndAbandonContext",
+                      &GrDirectContext::releaseResourcesAndAbandonContext)
+#endif"""
+p.write_text(src.replace(old, new))
+print("bindings: releaseResourcesAndAbandonContext guarded to WebGL")
+EOF
+# ---- 1k. Emscripten lib + Dawn objects, minus 4 duplicate C functions ----
+# Skia needs Emscripten's libwebgpu.a (GetQueue, WGPUReference/Release, html5
+# JS glue have no Dawn-side equivalent on Emscripten), but 4 lifecycle
+# functions collide with Dawn's emdawnwebgpu_c objects (duplicate symbols).
+# Keep Emscripten's copies (opaque handles + uncalled FreeMembers) and delete
+# Dawn's: matched by signature with balanced-brace body removal.
+python3 - <<'EOF'
+import pathlib, re
+p = pathlib.Path(
+    "third_party/externals/dawn/third_party/emdawnwebgpu/pkg/webgpu/src/webgpu.cpp"
+)
+src = p.read_text()
+for sig in [
+    r"WGPUInstance wgpuCreateInstance\(",
+    r"void wgpuInstanceRelease\(",
+    r"void wgpuSurfaceCapabilitiesFreeMembers\(",
+    r"void wgpuAdapterInfoFreeMembers\(",
+]:
+    # find signature, then drop through the balanced closing brace
+    matches = [m for m in re.finditer(sig, src)]
+    assert len(matches) == 1, f"{sig}: expected 1 def, found {len(matches)}"
+    m = matches[0]
+    # body starts at first '{' after signature line
+    open_idx = src.index("{", m.start())
+    depth = 0
+    i = open_idx
+    while True:
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+            if depth == 0:
+                break
+        i += 1
+    # extend through end of line, drop one following blank line if present
+    j = i + 1
+    if src[j : j + 1] == "\n":
+        j += 1
+    # also drop preceding comment/blank context? No - keep it minimal.
+    src = src[: m.start()] + src[j:]
+    print(f"dropped Dawn def: {sig}")
+p.write_text(src)
+print("webgpu.cpp: 4 duplicate C functions removed (Emscripten's win)")
 EOF
 python3 bin/activate-emsdk
 # shellcheck disable=SC1091
