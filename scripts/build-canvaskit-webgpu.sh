@@ -286,6 +286,41 @@ python3 "$REPO_DIR/scripts/port-skia-dawn-wasm.py" "$SKIA_DIR"
 # Graphite (ContextFactory::MakeDawn, per-surface Recorder, explicit
 # snap/insert/submit present). Same JS contract. Assert-anchored.
 python3 "$REPO_DIR/scripts/port-canvaskit-graphite.py" "$SKIA_DIR"
+# ---- 1k. Link Dawn's emdawnwebgpu JS glue, not Emscripten's stale lib ----
+# -sUSE_WEBGPU=1 links Emscripten's libwebgpu.a whose 4 lifecycle functions
+# collide with Dawn's emdawnwebgpu_c objects (duplicate symbols) AND whose
+# struct layouts predate Dawn main (e.g. missing WGPUSurfaceCapabilities.usages
+# -> wrong frees). Drop it; wire Dawn's own JS libraries instead (same rev as
+# the headers/objects, so layouts match by construction). Emscripten's
+# html5_webgpu JS shims (import_*/get_device) still auto-resolve.
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("modules/canvaskit/BUILD.gn")
+src = p.read_text()
+old = """      "-sUSE_WEBGL2=0",
+      "-sUSE_WEBGPU=1",
+      "-sASYNCIFY","""
+assert src.count(old) == 1, "canvaskit webgpu ldflags anchor not unique/found"
+new = """      "-sUSE_WEBGL2=0",
+      "-sASYNCIFY","""
+src = src.replace(old, new)
+old2 = """      # Modules from html5_webgpu for JS<->WASM interop
+      "-sEXPORTED_RUNTIME_METHODS=WebGPU,JsValStore","""
+assert src.count(old2) == 1, "canvaskit exports anchor not unique/found"
+new2 = """      # Modules from html5_webgpu for JS<->WASM interop
+      "-sEXPORTED_RUNTIME_METHODS=WebGPU,JsValStore",
+
+      # Dawn's own Emscripten JS glue (same rev as headers/objects).
+      # EM gen dir paths are relative to root_build_dir (ninja link cwd).
+      "--js-library=cmake_dawn/gen/src/emdawnwebgpu/library_webgpu_enum_tables.js",
+      "--js-library=cmake_dawn/gen/src/emdawnwebgpu/library_webgpu_generated_sig_info.js",
+      "--js-library=cmake_dawn/gen/src/emdawnwebgpu/library_webgpu_generated_struct_info.js",
+      "--js-library=" + rebase_path(
+              "../../third_party/externals/dawn/third_party/emdawnwebgpu/pkg/webgpu/src/library_webgpu.js",
+              root_build_dir),"""
+p.write_text(src.replace(old2, new2))
+print("canvaskit BUILD.gn: Dawn emdawnwebgpu JS libs wired, USE_WEBGPU dropped")
+EOF
 python3 bin/activate-emsdk
 # shellcheck disable=SC1091
 source third_party/externals/emsdk/emsdk_env.sh
