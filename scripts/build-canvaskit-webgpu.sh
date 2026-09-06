@@ -280,6 +280,12 @@ EOF
 # removed C API. The unified C++ API works on Emscripten, so drop the stale
 # branches. Assert-anchored: fails loud if upstream migrates these itself.
 python3 "$REPO_DIR/scripts/port-skia-dawn-wasm.py" "$SKIA_DIR"
+# ---- 1j2. Port CanvasKit Dawn bindings Ganesh -> Graphite ----
+# Upstream's CK_ENABLE_WEBGPU bindings target the removed Ganesh-on-Dawn
+# backend (GrDirectContext::MakeDawn no longer exists). Rewrites them around
+# Graphite (ContextFactory::MakeDawn, per-surface Recorder, explicit
+# snap/insert/submit present). Same JS contract. Assert-anchored.
+python3 "$REPO_DIR/scripts/port-canvaskit-graphite.py" "$SKIA_DIR"
 python3 bin/activate-emsdk
 # shellcheck disable=SC1091
 source third_party/externals/emsdk/emsdk_env.sh
