@@ -378,4 +378,277 @@ replace_once(
 if FAILURES:
     print(f"\n{len(FAILURES)} hunk(s) failed — upstream moved; rework needed.")
     sys.exit(1)
+
+# --------------------------------- Canvas surfaces via Dawn Surface model ---
+# Skia's webgpu.js used JS getCurrentTexture + emscripten_webgpu_import_texture,
+# which has no Dawn-side equivalent. Use Dawn's native Surface flow instead:
+# wgpuInstanceCreateSurface (Emscripten canvas-selector descriptor) +
+# SurfaceConfigure, then per-frame GetCurrentTexture adopted by the surface
+# path above. No explicit present: the browser composites submitted work.
+replace_once(
+    """    bool replaceBackendTexture(uint32_t textureHandle,
+                               uint32_t,
+                               int,
+                               int) {
+        // Swapchain-resize path: recreate internals around the new texture
+        // (Graphite surfaces cannot rebind in place). Old contents discarded.
+        return this->reset(textureHandle, nullptr);
+    }
+};""",
+    """    bool replaceBackendTexture(uint32_t textureHandle,
+                               uint32_t,
+                               int,
+                               int) {
+        // Swapchain-resize path from Surface.prototype helpers: recreate internals
+        // around the new texture (Graphite surfaces cannot rebind in place).
+        // JS already handles false gracefully.
+        return this->reset(textureHandle, nullptr);
+    }
+
+    // Adopt a Dawn-native texture pointer (from GetCanvasTexture below).
+    // Unlike reset(), this takes ownership of an already-referenced texture.
+    bool resetNative(uint32_t texturePtr,
+                     int width,
+                     int height,
+                     sk_sp<SkColorSpace> cs) {
+        if (!fDevCtx || !fDevCtx->context) {
+            return false;
+        }
+        if (cs) {
+            fColorSpace = std::move(cs);
+        }
+        if (!fColorSpace) {
+            fColorSpace = SkColorSpace::MakeSRGB();
+        }
+        WGPUTexture texture = reinterpret_cast<WGPUTexture>(
+                static_cast<uintptr_t>(texturePtr));
+        if (!texture) {
+            return false;
+        }
+        skgpu::graphite::BackendTexture backendTex =
+                skgpu::graphite::BackendTextures::MakeDawn(texture);
+        auto recorder = fDevCtx->context->makeRecorder();
+        if (!recorder) {
+            return false;
+        }
+        sk_sp<SkSurface> surface = SkSurfaces::WrapBackendTexture(
+                recorder.get(), backendTex, fColorSpace,
+                /*props=*/nullptr, /*releaseP=*/nullptr, /*releaseC=*/nullptr,
+                "DawnCanvasSurface");
+        if (!surface) {
+            return false;
+        }
+        (void)width;
+        (void)height;
+        fRecorder = std::move(recorder);
+        fSurface = std::move(surface);
+        return true;
+    }
+};
+
+// Opaque handle for a configured Dawn canvas surface (Emscripten canvas).
+struct DawnCanvasSurface {
+    wgpu::Surface surface;
+};
+
+static WGPUTextureFormat CanvasFormatFromString(const std::string& s) {
+    if (s == "rgba8unorm") {
+        return WGPUTextureFormat_RGBA8Unorm;
+    }
+    if (s == "rgba16float") {
+        return WGPUTextureFormat_RGBA16Float;
+    }
+    if (s == "bgra8unorm-srgb") {
+        return WGPUTextureFormat_BGRA8UnormSrgb;
+    }
+    if (s == "rgba8unorm-srgb") {
+        return WGPUTextureFormat_RGBA8UnormSrgb;
+    }
+    return WGPUTextureFormat_BGRA8Unorm;
+}
+
+std::shared_ptr<DawnCanvasSurface> CreateCanvasSurface(
+        std::shared_ptr<DawnGraphiteContext> devCtx,
+        const std::string& selector,
+        const std::string& formatStr,
+        int width,
+        int height) {
+    if (!devCtx || !devCtx->instance.Get() || !devCtx->device.Get()) {
+        return nullptr;
+    }
+    WGPUStringView selView{selector.data(), selector.size()};
+    WGPUEmscriptenSurfaceSourceCanvasHTMLSelector selDesc;
+    selDesc.chain.sType = WGPUSType_EmscriptenSurfaceSourceCanvasHTMLSelector;
+    selDesc.chain.next = nullptr;
+    selDesc.selector = selView;
+    WGPUSurfaceDescriptor desc;
+    desc.nextInChain = &selDesc.chain;
+    desc.label = {nullptr, 0};
+    WGPUSurface raw = wgpuInstanceCreateSurface(devCtx->instance.Get(), &desc);
+    if (!raw) {
+        return nullptr;
+    }
+    WGPUSurfaceConfiguration config = {};
+    config.device = devCtx->device.Get();
+    config.format = CanvasFormatFromString(formatStr);
+    config.usage = WGPUTextureUsage_RenderAttachment;
+    config.width = (uint32_t)(width > 0 ? width : 2);
+    config.height = (uint32_t)(height > 0 ? height : 2);
+    config.viewFormatCount = 0;
+    config.viewFormats = nullptr;
+    config.alphaMode = WGPUCompositeAlphaMode_Opaque;
+    config.presentMode = WGPUPresentMode_Fifo;
+    wgpuSurfaceConfigure(raw, &config);
+    auto out = std::make_shared<DawnCanvasSurface>();
+    out->surface = wgpu::Surface::Acquire(raw);
+    return out;
+}
+
+// Current swapchain texture as a 32-bit handle (0 on failure). The returned
+// reference transfers to the caller (adopted by MakeGPUTextureSurfaceNative).
+uint32_t GetCanvasTexture(std::shared_ptr<DawnCanvasSurface> holder) {
+    if (!holder || !holder->surface.Get()) {
+        return 0;
+    }
+    WGPUSurfaceTexture surfTex;
+    wgpuSurfaceGetCurrentTexture(holder->surface.Get(), &surfTex);
+    if (surfTex.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
+        surfTex.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
+        return 0;
+    }
+    if (!surfTex.texture) {
+        return 0;
+    }
+    return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(surfTex.texture));
+}
+
+std::shared_ptr<DawnGraphiteSurface> MakeGPUTextureSurfaceNative(
+        std::shared_ptr<DawnGraphiteContext> devCtx,
+        uint32_t texturePtr,
+        int width,
+        int height,
+        sk_sp<SkColorSpace> colorSpace) {
+    if (!devCtx || !devCtx->context || !texturePtr) {
+        return nullptr;
+    }
+    auto out = std::make_shared<DawnGraphiteSurface>();
+    out->fDevCtx = std::move(devCtx);
+    if (!out->resetNative(texturePtr, width, height, std::move(colorSpace))) {
+        return nullptr;
+    }
+    return out;
+}""",
+    "canvas-surface-model",
+)
+
+# ------------------------------------------------- surface-model bindings ---
+replace_once(
+    """    class_<DawnGraphiteSurface>("DawnGraphiteSurface")""",
+    """    class_<DawnCanvasSurface>("DawnCanvasSurface")
+        .smart_ptr<std::shared_ptr<DawnCanvasSurface>>(
+                "shared_ptr<DawnCanvasSurface>");
+    function("_CreateCanvasSurface", &CreateCanvasSurface);
+    function("_GetCanvasTexture", &GetCanvasTexture);
+    function("_MakeGPUTextureSurfaceNative", &MakeGPUTextureSurfaceNative);
+    class_<DawnGraphiteSurface>("DawnGraphiteSurface")""",
+    "surface-model-bindings",
+)
+
+# ------------------------------------------------- webgpu.js surface model --
+# Replace the JS getCurrentTexture+import flow (no Dawn equivalent) with the
+# native Surface flow above. Canvas gets an id if missing for the selector.
+def replace_in(path, old, new, label):
+    p = ROOT / path
+    src = p.read_text()
+    n = src.count(old)
+    check(n == 1, f"{path} [{label}]: expected 1 anchor, found {n}")
+    if n == 1:
+        p.write_text(src.replace(old, new))
+        print(f"patched {path} [{label}]")
+
+
+replace_in(
+    "modules/canvaskit/webgpu.js",
+    """      CanvasKit.MakeGPUCanvasContext = function(devCtx, canvas, opts) {
+        var canvasCtx = canvas.getContext('webgpu');
+        if (!canvasCtx) {
+          return null;
+        }
+
+        let format = (opts && opts.format) ? opts.format : navigator.gpu.getPreferredCanvasFormat();
+        // GPUCanvasConfiguration
+        canvasCtx.configure({
+            device: devCtx._device,
+            format: format,
+            alphaMode: (opts && opts.alphaMode) ? opts.alphaMode : undefined,
+        });
+
+        var context = {
+          '_inner': canvasCtx,
+          '_deviceContext': devCtx,
+          '_textureFormat': format,
+        };""",
+    """      CanvasKit.MakeGPUCanvasContext = function(devCtx, canvas, opts) {
+        if (!canvas.id) {
+          canvas.id = 'ckcanvas' + ((CanvasKit._canvasSeq = (CanvasKit._canvasSeq || 0) + 1));
+        }
+        let format = (opts && opts.format) ? opts.format : navigator.gpu.getPreferredCanvasFormat();
+        // NOTE (Dawn port): surfaces live natively (wgpuInstanceCreateSurface
+        // + Configure). No JS getCurrentTexture/import path exists on Dawn.
+        var surface = this._CreateCanvasSurface(
+            devCtx, '#' + canvas.id, format, canvas.width, canvas.height);
+        if (!surface) {
+          console.error('Failed to create Dawn canvas surface');
+          return null;
+        }
+        var context = {
+          '_surface': surface,
+          '_deviceContext': devCtx,
+          '_textureFormat': format,
+          '_canvas': canvas,
+        };""",
+    "js-canvas-context",
+)
+
+replace_in(
+    "modules/canvaskit/webgpu.js",
+    """      CanvasKit.MakeGPUCanvasSurface = function(canvasCtx, colorSpace, width, height) {
+        let context = canvasCtx._inner;
+        if (!width) {
+          width = context.canvas.width;
+        }
+        if (!height) {
+          height = context.canvas.height;
+        }
+        let surface = this.MakeGPUTextureSurface(canvasCtx._deviceContext,
+                                                 context.getCurrentTexture(),
+                                                 canvasCtx._textureFormat,
+                                                 width, height, colorSpace);
+        surface._canvasContext = canvasCtx;
+        return surface;
+      };""",
+    """      CanvasKit.MakeGPUCanvasSurface = function(canvasCtx, colorSpace, width, height) {
+        let canvas = canvasCtx._canvas;
+        if (!width) {
+          width = canvas.width;
+        }
+        if (!height) {
+          height = canvas.height;
+        }
+        // Native texture pointer (number); adopted by the surface, no JS store.
+        let texturePtr = this._GetCanvasTexture(canvasCtx._surface);
+        if (!texturePtr) {
+          return null;
+        }
+        let surface = this._MakeGPUTextureSurfaceNative(
+            canvasCtx._deviceContext, texturePtr, width, height, colorSpace || null);
+        surface._canvasContext = canvasCtx;
+        return surface;
+      };""",
+    "js-canvas-surface",
+)
+
+if FAILURES:
+    print(f"\n{len(FAILURES)} hunk(s) failed — upstream moved; rework needed.")
+    sys.exit(1)
 print("\nAll CanvasKit Graphite-port hunks applied.")
