@@ -344,7 +344,10 @@ new_deps = old_deps + """  if (skia_canvaskit_enable_webgpu) {
 src = src.replace(old_deps, new_deps)
 old_js = '      "--js-library=cmake_dawn/gen/src/emdawnwebgpu/library_webgpu_generated_struct_info.js",\n'
 assert src.count(old_js) == 1, "js-libs anchor not unique/found"
-emsdk_js = (pathlib.Path.cwd() / "third_party/externals/emsdk/src/lib/libhtml5_webgpu.js")
+emsdk_js = (
+    pathlib.Path.cwd()
+    / "third_party/externals/emsdk/upstream/emscripten/src/lib/libhtml5_webgpu.js"
+)
 assert emsdk_js.exists(), f"html5_webgpu.js missing at {emsdk_js}"
 new_js = old_js + f'      "--js-library={emsdk_js}",\n'
 src = src.replace(old_js, new_js)
