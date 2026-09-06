@@ -250,7 +250,32 @@ p.write_text(src.replace(old, new))
 print("dawn_api_config: canvaskit uses Dawn EM headers")
 EOF
 
-# ---- 1i. Port Skia's Dawn backend to current Dawn API (wasm) ----
+# ---- 1j. Define CK_ENABLE_WEBGPU (upstream never wires it) ----
+# canvaskit_bindings.cpp gates the Dawn MakeGrContext() + _MakeGrContext
+# embind binding on CK_ENABLE_WEBGPU, but modules/canvaskit/BUILD.gn only
+# ever defines CK_ENABLE_WEBGL. Result: webgpu.js calls this._MakeGrContext()
+# which doesn't exist ("not a function"). Wire the define to the GN arg.
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("modules/canvaskit/BUILD.gn")
+src = p.read_text()
+old = """  if (skia_enable_ganesh) {
+    defines += [ "SK_GANESH" ]
+    if (skia_canvaskit_enable_webgl) {
+      defines += [
+        "SK_GL",
+        "CK_ENABLE_WEBGL",
+      ]
+    }
+  }"""
+assert src.count(old) == 1, "canvaskit BUILD.gn ganesh anchor not unique/found"
+new = old + """
+  if (skia_canvaskit_enable_webgpu) {
+    defines += [ "CK_ENABLE_WEBGPU" ]
+  }"""
+p.write_text(src.replace(old, new))
+print("canvaskit BUILD.gn: CK_ENABLE_WEBGPU wired")
+EOF
 # Upstream Skia carries stale __EMSCRIPTEN__ branches written against Dawn's
 # removed C API. The unified C++ API works on Emscripten, so drop the stale
 # branches. Assert-anchored: fails loud if upstream migrates these itself.
