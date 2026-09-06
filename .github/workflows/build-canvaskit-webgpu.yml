@@ -160,7 +160,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           SKIA_SHA=$(cat "$GITHUB_WORKSPACE/SKIA_SHA")
-          TAG="canvaskit-webgpu-$(date +%Y%m%d)-${SKIA_SHA:0:12}"
+          TAG="canvaskit-webgpu-$(date +%Y%m%d)-${SKIA_SHA:0:12}-r${{ github.run_id }}"
           echo "TAG=$TAG" >> "$GITHUB_ENV"
           gh release create "$TAG" "$GITHUB_WORKSPACE/dist/"* \
             --repo "$GITHUB_REPOSITORY" \
