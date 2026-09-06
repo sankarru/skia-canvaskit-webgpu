@@ -44,6 +44,9 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 330
+    # Needed: 'gh release create' (GITHUB_TOKEN defaults to read-only here).
+    permissions:
+      contents: write
     steps:
       - name: Free disk space
         run: |
