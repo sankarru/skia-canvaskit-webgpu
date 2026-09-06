@@ -321,8 +321,12 @@ replace_once(
     """#ifdef CK_ENABLE_WEBGPU
     constant("webgpu", true);
     function("_MakeGPUTextureSurface", &MakeGPUTextureSurface);
-    class_<DawnGraphiteContext>("DawnGraphiteContext");
+    class_<DawnGraphiteContext>("DawnGraphiteContext")
+        .smart_ptr<std::shared_ptr<DawnGraphiteContext>>(
+                "shared_ptr<DawnGraphiteContext>");
     class_<DawnGraphiteSurface>("DawnGraphiteSurface")
+        .smart_ptr<std::shared_ptr<DawnGraphiteSurface>>(
+                "shared_ptr<DawnGraphiteSurface>")
         .function("getCanvas", &DawnGraphiteSurface::getCanvas, allow_raw_pointers())
         .function("flush", &DawnGraphiteSurface::flush)
         .function("dispose", &DawnGraphiteSurface::dispose)
